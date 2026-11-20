@@ -39,58 +39,90 @@ st.markdown(
 
 SKIP_WORDS = ("icon", "logo", "flag", "portrait", "symbol")
 
-OTHER_LANGS = (
+OTHER_LANG_NAMES = (
+    "spanish", "german", "french", "italian", "portuguese", "russian",
+    "chinese", "japanese", "korean", "arabic", "polish", "dutch",
+    "turkish", "swedish", "czech", "ukrainian", "vietnamese",
+    "indonesian", "hungarian", "persian", "hebrew", "romanian",
+    "catalan", "finnish", "danish", "norwegian", "greek", "bulgarian",
+    "serbian", "croatian", "thai", "hindi", "bengali", "latin",
+    "galician", "basque", "slovak", "slovenian", "lithuanian",
+    "latvian", "estonian", "malay", "tamil", "urdu",
+)
+
+OTHER_LANG_CODES = (
     "es", "de", "fr", "it", "pt", "ru", "zh", "ja", "ko", "ar", "pl",
     "nl", "tr", "sv", "cs", "uk", "vi", "id", "hu", "fa", "he", "ro",
     "ca", "fi", "da", "no", "el", "bg", "sr", "hr", "th", "hi", "bn",
+    "la", "gl", "eu", "sk", "sl", "lt", "lv", "et", "ms", "ta", "ur",
 )
 
+HEADERS = {"User-Agent": "StudyGuideApp/1.0 (student project)"}
+API = "https://commons.wikimedia.org/w/api.php"
 
-def language_tag_score(title):
-    """Return 1 if the file name looks English, -1 if another language."""
+
+def strip_html(text):
+    return re.sub(r"<[^>]+>", " ", text or "")
+
+
+def language_score(title, categories, description):
+    """1 = looks English, -1 = looks like another language, 0 = unknown."""
     name = title.lower().rsplit(".", 1)[0]
     tokens = re.split(r"[\s_\-().,]+", name)
-    if "en" in tokens or "english" in tokens:
-        return 1
-    if any(tok in OTHER_LANGS for tok in tokens):
+    cats = " ".join(categories).lower()
+    desc = description.lower()
+    blob = f"{cats} {desc}"
+
+    if any(f"({lang})" in cats or f"in {lang}" in blob
+           or f"{lang} language" in blob for lang in OTHER_LANG_NAMES):
         return -1
+    if any(tok in OTHER_LANG_CODES for tok in tokens):
+        return -1
+    if ("in english" in blob or "english" in cats or "(english)" in cats
+            or "en" in tokens or "english" in tokens):
+        return 1
     return 0
 
 
 def get_commons_images(query, limit=3):
-    headers = {"User-Agent": "StudyGuideApp/1.0 (student project)"}
-    api = "https://commons.wikimedia.org/w/api.php"
     try:
         data = requests.get(
-            api,
+            API,
             params={
                 "action": "query",
                 "generator": "search",
                 "gsrsearch": f"{query} diagram English",
                 "gsrnamespace": 6,
                 "gsrlimit": 40,
-                "prop": "imageinfo",
-                "iiprop": "url|mime|size",
+                "prop": "imageinfo|categories",
+                "iiprop": "url|mime|size|extmetadata",
                 "iiurlwidth": 600,
+                "cllimit": "max",
                 "format": "json",
             },
-            headers=headers,
+            headers=HEADERS,
             timeout=15,
         ).json()
         pages = data.get("query", {}).get("pages", {})
         candidates = []
         for page in pages.values():
             title = page.get("title", "")
-            lowered = title.lower()
-            if any(word in lowered for word in SKIP_WORDS):
-                continue
-            score = language_tag_score(title)
-            if score < 0:
+            if any(word in title.lower() for word in SKIP_WORDS):
                 continue
             info = page.get("imageinfo", [{}])[0]
             if info.get("mime") not in ("image/jpeg", "image/png"):
                 continue
             if info.get("width", 0) < 400 or info.get("height", 0) < 300:
+                continue
+            categories = [
+                c.get("title", "") for c in page.get("categories", [])
+            ]
+            meta = info.get("extmetadata", {})
+            description = strip_html(
+                meta.get("ImageDescription", {}).get("value", "")
+            )
+            score = language_score(title, categories, description)
+            if score < 0:
                 continue
             url = info.get("thumburl") or info.get("url")
             candidates.append((score, url))
