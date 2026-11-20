@@ -36,49 +36,41 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+SKIP_WORDS = ("icon", "logo", "flag", "portrait", "commons-logo", "symbol")
 
-def get_wikipedia_images(query, limit=3):
+
+def get_commons_images(query, limit=3):
     headers = {"User-Agent": "StudyGuideApp/1.0 (student project)"}
-    api = "https://en.wikipedia.org/w/api.php"
+    api = "https://commons.wikimedia.org/w/api.php"
     try:
-        search = requests.get(
+        data = requests.get(
             api,
             params={
                 "action": "query",
-                "list": "search",
-                "srsearch": query,
-                "srlimit": 1,
-                "format": "json",
-            },
-            headers=headers,
-            timeout=15,
-        ).json()
-        hits = search["query"]["search"]
-        if not hits:
-            return []
-        title = hits[0]["title"]
-
-        files = requests.get(
-            api,
-            params={
-                "action": "query",
-                "titles": title,
-                "generator": "images",
-                "gimlimit": 30,
+                "generator": "search",
+                "gsrsearch": f"{query} diagram",
+                "gsrnamespace": 6,
+                "gsrlimit": 30,
                 "prop": "imageinfo",
-                "iiprop": "url|mime",
+                "iiprop": "url|mime|size",
                 "iiurlwidth": 600,
                 "format": "json",
             },
             headers=headers,
             timeout=15,
         ).json()
-        pages = files.get("query", {}).get("pages", {})
+        pages = data.get("query", {}).get("pages", {})
         urls = []
         for page in pages.values():
+            title = page.get("title", "").lower()
+            if any(word in title for word in SKIP_WORDS):
+                continue
             info = page.get("imageinfo", [{}])[0]
-            if info.get("mime") in ("image/jpeg", "image/png"):
-                urls.append(info.get("thumburl") or info.get("url"))
+            if info.get("mime") not in ("image/jpeg", "image/png"):
+                continue
+            if info.get("width", 0) < 400 or info.get("height", 0) < 300:
+                continue
+            urls.append(info.get("thumburl") or info.get("url"))
         return urls[:limit]
     except Exception:
         return []
@@ -105,7 +97,7 @@ if st.button("Explain it"):
                     {"topic": topic, "level": level, "language": language}
                 )
                 st.session_state["answer"] = response.text
-                st.session_state["images"] = get_wikipedia_images(topic)
+                st.session_state["images"] = get_commons_images(topic)
             except Exception as e:
                 st.session_state["answer"] = None
                 st.error(f"Something went wrong: {e}")
