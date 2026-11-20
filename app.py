@@ -1,3 +1,4 @@
+import re
 import requests
 import streamlit as st
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -36,7 +37,24 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-SKIP_WORDS = ("icon", "logo", "flag", "portrait", "commons-logo", "symbol")
+SKIP_WORDS = ("icon", "logo", "flag", "portrait", "symbol")
+
+OTHER_LANGS = (
+    "es", "de", "fr", "it", "pt", "ru", "zh", "ja", "ko", "ar", "pl",
+    "nl", "tr", "sv", "cs", "uk", "vi", "id", "hu", "fa", "he", "ro",
+    "ca", "fi", "da", "no", "el", "bg", "sr", "hr", "th", "hi", "bn",
+)
+
+
+def language_tag_score(title):
+    """Return 1 if the file name looks English, -1 if another language."""
+    name = title.lower().rsplit(".", 1)[0]
+    tokens = re.split(r"[\s_\-().,]+", name)
+    if "en" in tokens or "english" in tokens:
+        return 1
+    if any(tok in OTHER_LANGS for tok in tokens):
+        return -1
+    return 0
 
 
 def get_commons_images(query, limit=3):
@@ -48,9 +66,9 @@ def get_commons_images(query, limit=3):
             params={
                 "action": "query",
                 "generator": "search",
-                "gsrsearch": f"{query} diagram",
+                "gsrsearch": f"{query} diagram English",
                 "gsrnamespace": 6,
-                "gsrlimit": 30,
+                "gsrlimit": 40,
                 "prop": "imageinfo",
                 "iiprop": "url|mime|size",
                 "iiurlwidth": 600,
@@ -60,18 +78,24 @@ def get_commons_images(query, limit=3):
             timeout=15,
         ).json()
         pages = data.get("query", {}).get("pages", {})
-        urls = []
+        candidates = []
         for page in pages.values():
-            title = page.get("title", "").lower()
-            if any(word in title for word in SKIP_WORDS):
+            title = page.get("title", "")
+            lowered = title.lower()
+            if any(word in lowered for word in SKIP_WORDS):
+                continue
+            score = language_tag_score(title)
+            if score < 0:
                 continue
             info = page.get("imageinfo", [{}])[0]
             if info.get("mime") not in ("image/jpeg", "image/png"):
                 continue
             if info.get("width", 0) < 400 or info.get("height", 0) < 300:
                 continue
-            urls.append(info.get("thumburl") or info.get("url"))
-        return urls[:limit]
+            url = info.get("thumburl") or info.get("url")
+            candidates.append((score, url))
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        return [url for _, url in candidates][:limit]
     except Exception:
         return []
 
