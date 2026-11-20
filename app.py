@@ -13,11 +13,18 @@ levels = [
     "Intermediate (HSC)", "BSc level", "Master's level", "Doctorate level",
 ]
 
-languages = ["Bengali", "English", "Hindi", "Arabic", "Spanish", "French"]
+LANG_CODES = {
+    "Bengali": "bn",
+    "English": "en",
+    "Hindi": "hi",
+    "Arabic": "ar",
+    "Spanish": "es",
+    "French": "fr",
+}
 
 topic = st.text_input("What topic do you want to learn about?")
 level = st.selectbox("Which level are you studying at?", levels)
-language = st.selectbox("Which language?", languages)
+language = st.selectbox("Which language?", list(LANG_CODES))
 font_size = st.slider("Font size", 14, 28, 18)
 font_style = st.selectbox(
     "Font style", ["sans-serif", "serif", "monospace"]
@@ -37,123 +44,114 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-SKIP_WORDS = ("icon", "logo", "flag", "portrait", "symbol")
-
-OTHER_LANG_NAMES = (
-    "spanish", "german", "french", "italian", "portuguese", "russian",
-    "chinese", "japanese", "korean", "arabic", "polish", "dutch",
-    "turkish", "swedish", "czech", "ukrainian", "vietnamese",
-    "indonesian", "hungarian", "persian", "hebrew", "romanian",
-    "catalan", "finnish", "danish", "norwegian", "greek", "bulgarian",
-    "serbian", "croatian", "thai", "hindi", "bengali", "latin",
-    "galician", "basque", "slovak", "slovenian", "lithuanian",
-    "latvian", "estonian", "malay", "tamil", "urdu",
-)
-
-OTHER_LANG_CODES = (
-    "es", "de", "fr", "it", "pt", "ru", "zh", "ja", "ko", "ar", "pl",
-    "nl", "tr", "sv", "cs", "uk", "vi", "id", "hu", "fa", "he", "ro",
-    "ca", "fi", "da", "no", "el", "bg", "sr", "hr", "th", "hi", "bn",
-    "la", "gl", "eu", "sk", "sl", "lt", "lv", "et", "ms", "ta", "ur",
-)
-
 HEADERS = {"User-Agent": "StudyGuideApp/1.0 (student project)"}
-API = "https://commons.wikimedia.org/w/api.php"
+SKIP_WORDS = (
+    "icon", "logo", "flag", "portrait", "symbol", "commons-logo",
+    "wiki", "edit", "question", "ambox", "stub",
+)
 
 
-def strip_html(text):
-    return re.sub(r"<[^>]+>", " ", text or "")
+def make_llm():
+    return ChatGoogleGenerativeAI(
+        model="gemini-3.5-flash-lite",
+        timeout=60,
+        max_retries=1,
+    )
 
 
-def language_score(title, categories, description):
-    """1 = looks English, -1 = looks like another language, 0 = unknown."""
-    name = title.lower().rsplit(".", 1)[0]
-    tokens = re.split(r"[\s_\-().,]+", name)
-    cats = " ".join(categories).lower()
-    desc = description.lower()
-    blob = f"{cats} {desc}"
-
-    if any(f"({lang})" in cats or f"in {lang}" in blob
-           or f"{lang} language" in blob for lang in OTHER_LANG_NAMES):
-        return -1
-    if any(tok in OTHER_LANG_CODES for tok in tokens):
-        return -1
-    if ("in english" in blob or "english" in cats or "(english)" in cats
-            or "en" in tokens or "english" in tokens):
-        return 1
-    return 0
-
-
-def get_commons_images(query, limit=3):
+def translate_topic(text, target_language):
+    if target_language == "English":
+        return text
     try:
-        data = requests.get(
-            API,
+        reply = make_llm().invoke(
+            f"Translate this study topic into {target_language}. "
+            f"Reply with only the translated words, nothing else: {text}"
+        )
+        return reply.text.strip() or text
+    except Exception:
+        return text
+
+
+def images_from_wikipedia(query, code, limit=3):
+    api = f"https://{code}.wikipedia.org/w/api.php"
+    try:
+        search = requests.get(
+            api,
             params={
                 "action": "query",
-                "generator": "search",
-                "gsrsearch": f"{query} diagram English",
-                "gsrnamespace": 6,
-                "gsrlimit": 40,
-                "prop": "imageinfo|categories",
-                "iiprop": "url|mime|size|extmetadata",
+                "list": "search",
+                "srsearch": query,
+                "srlimit": 1,
+                "format": "json",
+            },
+            headers=HEADERS,
+            timeout=15,
+        ).json()
+        hits = search.get("query", {}).get("search", [])
+        if not hits:
+            return []
+        title = hits[0]["title"]
+
+        data = requests.get(
+            api,
+            params={
+                "action": "query",
+                "titles": title,
+                "generator": "images",
+                "gimlimit": 40,
+                "prop": "imageinfo",
+                "iiprop": "url|mime|size",
                 "iiurlwidth": 600,
-                "cllimit": "max",
                 "format": "json",
             },
             headers=HEADERS,
             timeout=15,
         ).json()
         pages = data.get("query", {}).get("pages", {})
-        candidates = []
+        urls = []
         for page in pages.values():
-            title = page.get("title", "")
-            if any(word in title.lower() for word in SKIP_WORDS):
+            name = page.get("title", "").lower()
+            if any(word in name for word in SKIP_WORDS):
                 continue
             info = page.get("imageinfo", [{}])[0]
             if info.get("mime") not in ("image/jpeg", "image/png"):
                 continue
             if info.get("width", 0) < 400 or info.get("height", 0) < 300:
                 continue
-            categories = [
-                c.get("title", "") for c in page.get("categories", [])
-            ]
-            meta = info.get("extmetadata", {})
-            description = strip_html(
-                meta.get("ImageDescription", {}).get("value", "")
-            )
-            score = language_score(title, categories, description)
-            if score < 0:
-                continue
-            url = info.get("thumburl") or info.get("url")
-            candidates.append((score, url))
-        candidates.sort(key=lambda item: item[0], reverse=True)
-        return [url for _, url in candidates][:limit]
+            urls.append(info.get("thumburl") or info.get("url"))
+        return urls[:limit]
     except Exception:
         return []
+
+
+def get_images(topic_text, language_name):
+    code = LANG_CODES[language_name]
+    translated = translate_topic(topic_text, language_name)
+    images = images_from_wikipedia(translated, code)
+    if not images and code != "en":
+        images = images_from_wikipedia(topic_text, "en")
+    return images
 
 
 if st.button("Explain it"):
     if not topic.strip():
         st.warning("Please type a topic first.")
     else:
-        llm = ChatGoogleGenerativeAI(
-            model="gemini-3.5-flash-lite",
-            timeout=60,
-            max_retries=1,
-        )
         prompt = ChatPromptTemplate.from_template(
             "You are a study helper. Explain {topic} for a student at "
             "{level}. Match the depth, vocabulary and examples to that "
             "level. Answer in {language}."
         )
-        chain = prompt | llm
+        chain = prompt | make_llm()
         with st.spinner("Thinking..."):
             try:
                 response = chain.invoke(
                     {"topic": topic, "level": level, "language": language}
                 )
                 st.session_state["answer"] = response.text
-                st.session_state["images"] = get_commons_images(topic)
+                st.session_state["images"] = (
+                    get_images(topic, language) if show_images else []
+                )
             except Exception as e:
                 st.session_state["answer"] = None
                 st.error(f"Something went wrong: {e}")
