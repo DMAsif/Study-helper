@@ -1,10 +1,9 @@
-import os
 import streamlit as st
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
 
-st.set_page_config(page_title="Study Helper", page_icon="📚")
-st.title("📚 Study Helper")
+st.set_page_config(page_title="Study Guide", page_icon="📚")
+st.title("📚 Study Guide")
 
 levels = [
     "Class 1", "Class 2", "Class 3", "Class 4", "Class 5",
@@ -17,6 +16,22 @@ languages = ["Bengali", "English", "Hindi", "Arabic", "Spanish", "French"]
 topic = st.text_input("What topic do you want to learn about?")
 level = st.selectbox("Which level are you studying at?", levels)
 language = st.selectbox("Which language?", languages)
+font_size = st.slider("Font size", 14, 28, 18)
+font_style = st.selectbox(
+    "Font style", ["sans-serif", "serif", "monospace"]
+)
+
+st.markdown(
+    f"""
+    <style>
+    .stMarkdown p, .stMarkdown li {{
+        font-size: {font_size}px;
+        font-family: {font_style};
+    }}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 if st.button("Explain it"):
     if not topic.strip():
